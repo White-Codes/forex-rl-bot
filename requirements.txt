@@ -1,0 +1,31 @@
+# Core RL
+stable-baselines3==2.3.2
+gymnasium==0.29.1
+torch==2.2.0
+
+# Data & Features
+pandas==2.2.0
+numpy==1.26.4
+pandas-ta==0.3.14b
+yfinance==0.2.36
+requests==2.31.0
+
+# Visualization & Reporting
+matplotlib==3.8.2
+seaborn==0.13.2
+plotly==5.18.0
+
+# Config & Utils
+pyyaml==6.0.1
+python-dotenv==1.0.0
+loguru==0.7.2
+
+# Testing
+pytest==8.0.0
+pytest-cov==4.1.0
+
+# Optimization
+optuna==3.5.0
+
+# Progress
+tqdm==4.66.1
