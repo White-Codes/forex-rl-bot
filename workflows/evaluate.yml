@@ -1,0 +1,112 @@
+name: Model Evaluation
+
+on:
+  workflow_dispatch:
+    inputs:
+      pair:
+        description: 'Trading pair to evaluate'
+        default: 'EURUSD'
+        required: true
+      split:
+        description: 'Data split to evaluate on'
+        default: 'val'
+        required: true
+        type: choice
+        options:
+          - train
+          - val
+          - test
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -e .
+          pip install -r requirements.txt
+
+      - name: Prepare data
+        run: |
+          python scripts/prepare_data.py \
+            --pair ${{ github.event.inputs.pair }}
+
+      - name: Download best model artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: trained-model-${{ github.run_number }}
+          path: models/
+        continue-on-error: true
+
+      - name: Run evaluation backtest
+        run: |
+          python scripts/backtest.py \
+            --pair ${{ github.event.inputs.pair }} \
+            --split ${{ github.event.inputs.split }}
+
+      - name: Generate HTML report
+        run: |
+          python scripts/generate_report.py \
+            --pair ${{ github.event.inputs.pair }} \
+            --split ${{ github.event.inputs.split }}
+
+      - name: Run full test suite
+        run: |
+          pytest tests/ -v \
+            --cov=env \
+            --cov=agents \
+            --cov=backtest \
+            --cov-report=xml \
+            --cov-report=term-missing
+
+      - name: Upload evaluation results
+        uses: actions/upload-artifact@v4
+        with:
+          name: evaluation-results-${{ github.run_number }}
+          path: |
+            results/
+          retention-days: 90
+
+      - name: Comment results on commit
+        uses: actions/github-script@v7
+        if: always()
+        with:
+          script: |
+            const fs = require('fs');
+            const metricsPath = `results/${{ github.event.inputs.pair }}/backtest_${{ github.event.inputs.split }}_metrics.json`;
+            
+            if (fs.existsSync(metricsPath)) {
+              const metrics = JSON.parse(fs.readFileSync(metricsPath, 'utf8'));
+              const body = `## 📊 Evaluation Results — ${{ github.event.inputs.pair }}
+              
+              | Metric | Value |
+              |--------|-------|
+              | Total Return | ${metrics.total_return_pct.toFixed(2)}% |
+              | Sharpe Ratio | ${metrics.sharpe_ratio.toFixed(3)} |
+              | Max Drawdown | ${metrics.max_drawdown_pct.toFixed(2)}% |
+              | Win Rate | ${metrics.win_rate_pct.toFixed(1)}% |
+              | Profit Factor | ${metrics.profit_factor.toFixed(2)} |
+              | Total Trades | ${metrics.total_trades} |
+              | Calmar Ratio | ${metrics.calmar_ratio.toFixed(3)} |
+              
+              > Split: \`${{ github.event.inputs.split }}\` | Run: #${{ github.run_number }}`;
+              
+              github.rest.repos.createCommitComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                commit_sha: context.sha,
+                body: body
+              });
+            }
