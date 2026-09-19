@@ -1,0 +1,374 @@
+name: Forex RL Bot CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      pair:
+        description: 'Trading pair'
+        default: 'EURUSD'
+        required: true
+        type: choice
+        options:
+          - EURUSD
+          - GBPUSD
+          - USDJPY
+      timesteps:
+        description: 'Training timesteps'
+        default: '500000'
+        required: false
+      run_mode:
+        description: 'What to run'
+        default: 'full'
+        required: true
+        type: choice
+        options:
+          - full        # data + train + backtest + report
+          - data_only   # just prepare data
+          - train_only  # data + train
+          - backtest_only # backtest existing model
+
+env:
+  PYTHON_VERSION: '3.11'
+  DEFAULT_PAIR: 'EURUSD'
+  DEFAULT_TIMESTEPS: '500000'
+
+jobs:
+  # ─────────────────────────────────────────
+  # JOB 1: Code Quality & Tests
+  # ─────────────────────────────────────────
+  quality:
+    name: Code Quality & Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -e .
+          pip install -r requirements.txt
+
+      - name: Run unit tests
+        run: |
+          pytest tests/ -v \
+            --cov=env \
+            --cov=agents \
+            --cov=backtest \
+            --cov=utils \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --tb=short
+
+      - name: Upload coverage report
+        uses: codecov/codecov-action@v4
+        if: always()
+        with:
+          file: coverage.xml
+          fail_ci_if_error: false
+
+  # ─────────────────────────────────────────
+  # JOB 2: Prepare Data
+  # ─────────────────────────────────────────
+  prepare_data:
+    name: Fetch & Split Data
+    runs-on: ubuntu-latest
+    needs: quality
+    timeout-minutes: 20
+    if: |
+      github.event.inputs.run_mode != 'backtest_only'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -e .
+          pip install -r requirements.txt
+
+      - name: Prepare data
+        run: |
+          python scripts/prepare_data.py \
+            --pair ${{ github.event.inputs.pair || env.DEFAULT_PAIR }}
+
+      - name: Upload data splits
+        uses: actions/upload-artifact@v4
+        with:
+          name: data-splits-${{ github.run_number }}
+          path: data/
+          retention-days: 7
+
+  # ─────────────────────────────────────────
+  # JOB 3: Train Agent
+  # ─────────────────────────────────────────
+  train:
+    name: Train RL Agent
+    runs-on: ubuntu-latest
+    needs: prepare_data
+    timeout-minutes: 120
+    if: |
+      github.event.inputs.run_mode == 'full' ||
+      github.event.inputs.run_mode == 'train_only' ||
+      github.event.inputs.run_mode == '' ||
+      github.event.inputs.run_mode == null
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -e .
+          pip install -r requirements.txt
+
+      - name: Download data splits
+        uses: actions/download-artifact@v4
+        with:
+          name: data-splits-${{ github.run_number }}
+          path: data/
+
+      - name: Create output directories
+        run: |
+          mkdir -p models results logs
+
+      - name: Train agent
+        run: |
+          python scripts/train.py \
+            --pair ${{ github.event.inputs.pair || env.DEFAULT_PAIR }} \
+            --timesteps ${{ github.event.inputs.timesteps || env.DEFAULT_TIMESTEPS }}
+
+      - name: Upload trained model
+        uses: actions/upload-artifact@v4
+        with:
+          name: trained-model-${{ github.run_number }}
+          path: models/
+          retention-days: 30
+
+      - name: Upload training results
+        uses: actions/upload-artifact@v4
+        with:
+          name: training-results-${{ github.run_number }}
+          path: results/
+          retention-days: 30
+
+  # ─────────────────────────────────────────
+  # JOB 4: Backtest
+  # ─────────────────────────────────────────
+  backtest:
+    name: Backtest on Test Data
+    runs-on: ubuntu-latest
+    needs: train
+    timeout-minutes: 30
+    if: |
+      always() &&
+      (needs.train.result == 'success') &&
+      (github.event.inputs.run_mode == 'full' ||
+       github.event.inputs.run_mode == 'backtest_only' ||
+       github.event.inputs.run_mode == '' ||
+       github.event.inputs.run_mode == null)
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -e .
+          pip install -r requirements.txt
+
+      - name: Download data splits
+        uses: actions/download-artifact@v4
+        with:
+          name: data-splits-${{ github.run_number }}
+          path: data/
+
+      - name: Download trained model
+        uses: actions/download-artifact@v4
+        with:
+          name: trained-model-${{ github.run_number }}
+          path: models/
+
+      - name: Run backtest on validation data
+        run: |
+          python scripts/backtest.py \
+            --pair ${{ github.event.inputs.pair || env.DEFAULT_PAIR }} \
+            --split val
+
+      - name: Run backtest on test data
+        run: |
+          python scripts/backtest.py \
+            --pair ${{ github.event.inputs.pair || env.DEFAULT_PAIR }} \
+            --split test
+
+      - name: Upload backtest results
+        uses: actions/upload-artifact@v4
+        with:
+          name: backtest-results-${{ github.run_number }}
+          path: results/
+          retention-days: 90
+
+  # ─────────────────────────────────────────
+  # JOB 5: Generate Report
+  # ─────────────────────────────────────────
+  report:
+    name: Generate Performance Report
+    runs-on: ubuntu-latest
+    needs: backtest
+    timeout-minutes: 15
+    if: always() && needs.backtest.result == 'success'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -e .
+          pip install -r requirements.txt
+
+      - name: Download backtest results
+        uses: actions/download-artifact@v4
+        with:
+          name: backtest-results-${{ github.run_number }}
+          path: results/
+
+      - name: Generate val report
+        run: |
+          python scripts/generate_report.py \
+            --pair ${{ github.event.inputs.pair || env.DEFAULT_PAIR }} \
+            --split val
+
+      - name: Generate test report
+        run: |
+          python scripts/generate_report.py \
+            --pair ${{ github.event.inputs.pair || env.DEFAULT_PAIR }} \
+            --split test
+
+      - name: Upload HTML reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-reports-${{ github.run_number }}
+          path: |
+            results/**/*.html
+            results/**/*.png
+            results/**/*.json
+          retention-days: 90
+
+      - name: Post results summary to job
+        run: |
+          PAIR=${{ github.event.inputs.pair || env.DEFAULT_PAIR }}
+          METRICS_FILE="results/${PAIR}/backtest_test_metrics.json"
+
+          if [ -f "$METRICS_FILE" ]; then
+            echo "## 📊 Backtest Results — ${PAIR}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+            python3 - <<'EOF'
+          import json, os
+          pair = os.environ.get("PAIR", "EURUSD")
+          with open(f"results/{pair}/backtest_test_metrics.json") as f:
+              m = json.load(f)
+          rows = [
+              ("Total Return", f"{m['total_return_pct']:+.2f}%"),
+              ("Sharpe Ratio", f"{m['sharpe_ratio']:.3f}"),
+              ("Sortino Ratio", f"{m['sortino_ratio']:.3f}"),
+              ("Calmar Ratio", f"{m['calmar_ratio']:.3f}"),
+              ("Max Drawdown", f"{m['max_drawdown_pct']:.2f}%"),
+              ("Win Rate", f"{m['win_rate_pct']:.1f}%"),
+              ("Profit Factor", f"{m['profit_factor']:.2f}"),
+              ("Total Trades", str(m['total_trades'])),
+              ("Avg RR Ratio", f"{m['avg_rr_ratio']:.2f}"),
+          ]
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              for label, value in rows:
+                  f.write(f"| {label} | {value} |\n")
+          EOF
+          else
+            echo "⚠️ Metrics file not found" >> $GITHUB_STEP_SUMMARY
+          fi
+        env:
+          PAIR: ${{ github.event.inputs.pair || env.DEFAULT_PAIR }}
+
+      - name: Comment metrics on PR
+        uses: actions/github-script@v7
+        if: github.event_name == 'pull_request'
+        with:
+          script: |
+            const fs = require('fs');
+            const pair = '${{ github.event.inputs.pair || env.DEFAULT_PAIR }}';
+            const metricsPath = `results/${pair}/backtest_test_metrics.json`;
+
+            if (!fs.existsSync(metricsPath)) {
+              console.log('Metrics file not found, skipping PR comment');
+              return;
+            }
+
+            const metrics = JSON.parse(fs.readFileSync(metricsPath, 'utf8'));
+            const returnEmoji = metrics.total_return_pct > 0 ? '🟢' : '🔴';
+            const sharpeEmoji = metrics.sharpe_ratio > 1 ? '🟢' : metrics.sharpe_ratio > 0 ? '🟡' : '🔴';
+
+            const body = `## 📊 Backtest Results — ${pair}
+
+            ${returnEmoji} **Total Return:** ${metrics.total_return_pct.toFixed(2)}%
+            ${sharpeEmoji} **Sharpe Ratio:** ${metrics.sharpe_ratio.toFixed(3)}
+
+            | Metric | Value |
+            |--------|-------|
+            | Sortino Ratio | ${metrics.sortino_ratio.toFixed(3)} |
+            | Calmar Ratio | ${metrics.calmar_ratio.toFixed(3)} |
+            | Max Drawdown | ${metrics.max_drawdown_pct.toFixed(2)}% |
+            | Win Rate | ${metrics.win_rate_pct.toFixed(1)}% |
+            | Profit Factor | ${metrics.profit_factor.toFixed(2)} |
+            | Total Trades | ${metrics.total_trades} |
+            | Avg RR Ratio | ${metrics.avg_rr_ratio.toFixed(2)} |
+
+            > Run: #${{ github.run_number }} | Split: test | Timesteps: ${{ github.event.inputs.timesteps || env.DEFAULT_TIMESTEPS }}`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
