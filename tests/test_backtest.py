@@ -1,8 +1,8 @@
 import pytest
 import numpy as np
 import pandas as pd
-from unittest.mock import MagicMock
 import yaml
+from unittest.mock import MagicMock
 
 from backtest.engine import BacktestEngine
 from backtest.metrics import MetricsCalculator
@@ -22,39 +22,45 @@ def sample_data():
         prices.append(price)
 
     return pd.DataFrame({
-        "open": prices, "high": [p * 1.0005 for p in prices],
-        "low": [p * 0.9995 for p in prices],
-        "close": prices,
+        "open":   prices,
+        "high":   [p * 1.0005 for p in prices],
+        "low":    [p * 0.9995 for p in prices],
+        "close":  prices,
         "volume": np.random.randint(100, 1000, n).astype(float)
     }, index=dates)
 
 
 @pytest.fixture
-def env_config():
+def full_config():
     with open("configs/env_config.yaml") as f:
         return yaml.safe_load(f)
 
 
 @pytest.fixture
-def trading_env(sample_data, env_config):
-    feature_eng = FeatureEngineer(env_config)
-    features = feature_eng.build_features(sample_data)
-    return ForexTradingEnv(df=sample_data, features_df=features, training=False)
+def trading_env(sample_data, full_config):
+    feature_eng = FeatureEngineer(full_config)
+    features    = feature_eng.build_features(sample_data)
+    return ForexTradingEnv(
+        df=sample_data,
+        features_df=features,
+        config_path="configs/env_config.yaml",
+        training=False
+    )
 
 
 @pytest.fixture
-def mock_agent(trading_env):
-    """Mock agent that always holds - simplest case."""
+def mock_agent():
+    """Mock agent that always holds."""
     agent = MagicMock()
-    agent.predict.return_value = (0, None)  # Always hold
+    agent.predict.return_value = (0, None)
     return agent
 
 
 @pytest.fixture
-def mock_trading_agent(trading_env):
+def mock_trading_agent():
     """Mock agent that cycles through actions."""
-    agent = MagicMock()
-    actions = [1, 0, 0, 3, 2, 0, 0, 3]  # Buy, hold, hold, close, sell...
+    agent  = MagicMock()
+    actions = [1, 0, 0, 3, 2, 0, 0, 3]
     agent.predict.side_effect = [(a, None) for a in actions * 1000]
     return agent
 
@@ -62,7 +68,7 @@ def mock_trading_agent(trading_env):
 class TestMetricsCalculator:
 
     def test_empty_trade_log_returns_zeros(self):
-        calc = MetricsCalculator(initial_balance=10_000)
+        calc    = MetricsCalculator(initial_balance=10_000)
         metrics = calc.calculate_all(
             trade_log=[],
             equity_curve=[10_000, 10_000],
@@ -72,37 +78,38 @@ class TestMetricsCalculator:
         assert metrics["win_rate_pct"] == 0.0
 
     def test_profit_factor_no_losses(self):
-        calc = MetricsCalculator()
-        trades = [{"pnl": 10, "duration": 5}, {"pnl": 20, "duration": 3}]
-        df = pd.DataFrame(trades)
-        pf = calc._profit_factor(df)
+        calc   = MetricsCalculator()
+        trades = pd.DataFrame([
+            {"pnl": 10, "duration": 5},
+            {"pnl": 20, "duration": 3}
+        ])
+        pf = calc._profit_factor(trades)
         assert pf == float("inf")
 
     def test_sharpe_flat_equity_returns_zero(self):
-        calc = MetricsCalculator()
+        calc   = MetricsCalculator()
         equity = [10_000.0] * 100
         sharpe = calc._sharpe_ratio(np.array(equity))
         assert sharpe == 0.0
 
     def test_max_drawdown_calculation(self):
-        calc = MetricsCalculator(initial_balance=10_000)
-        # Goes up 20% then drops 10%
+        calc   = MetricsCalculator(initial_balance=10_000)
         equity = np.array([10_000, 11_000, 12_000, 10_800])
-        dd = calc._max_drawdown(equity)
+        dd     = calc._max_drawdown(equity)
         expected = ((12_000 - 10_800) / 12_000) * 100
         assert abs(dd - expected) < 0.01
 
     def test_win_rate_calculation(self):
-        calc = MetricsCalculator()
+        calc   = MetricsCalculator()
         trades = pd.DataFrame({"pnl": [10, -5, 20, -3, 15]})
-        wr = calc._win_rate(trades)
-        assert wr == 60.0  # 3 winners out of 5
+        wr     = calc._win_rate(trades)
+        assert wr == 60.0
 
 
 class TestBacktestEngine:
 
     def test_backtest_runs_to_completion(self, mock_agent, trading_env, tmp_path):
-        engine = BacktestEngine(
+        engine  = BacktestEngine(
             agent=mock_agent,
             env=trading_env,
             pair="EURUSD",
@@ -114,12 +121,12 @@ class TestBacktestEngine:
         assert len(results["equity_curve"]) > 0
 
     def test_equity_curve_starts_at_initial_balance(self, mock_agent, trading_env, tmp_path):
-        engine = BacktestEngine(mock_agent, trading_env, results_dir=str(tmp_path))
+        engine  = BacktestEngine(mock_agent, trading_env, results_dir=str(tmp_path))
         results = engine.run()
         assert results["equity_curve"][0] == trading_env.initial_balance
 
     def test_results_save_without_error(self, mock_agent, trading_env, tmp_path):
-        engine = BacktestEngine(mock_agent, trading_env, results_dir=str(tmp_path))
+        engine  = BacktestEngine(mock_agent, trading_env, results_dir=str(tmp_path))
         results = engine.run()
         engine.save_results(results, tag="test")
         assert (tmp_path / "EURUSD" / "test_metrics.json").exists()
