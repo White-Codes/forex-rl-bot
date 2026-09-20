@@ -1,13 +1,12 @@
 import pytest
 import numpy as np
 import pandas as pd
-from unittest.mock import MagicMock, patch
+import yaml
 from stable_baselines3.common.monitor import Monitor
 
 from agents.ppo_agent import PPOAgent
 from env.trading_env import ForexTradingEnv
 from env.features import FeatureEngineer
-import yaml
 
 
 @pytest.fixture
@@ -22,24 +21,30 @@ def sample_data():
         prices.append(price)
 
     return pd.DataFrame({
-        "open": prices, "high": [p * 1.0005 for p in prices],
-        "low": [p * 0.9995 for p in prices],
-        "close": prices,
+        "open":   prices,
+        "high":   [p * 1.0005 for p in prices],
+        "low":    [p * 0.9995 for p in prices],
+        "close":  prices,
         "volume": np.random.randint(100, 1000, n).astype(float)
     }, index=dates)
 
 
 @pytest.fixture
-def env_config():
+def full_config():
     with open("configs/env_config.yaml") as f:
         return yaml.safe_load(f)
 
 
 @pytest.fixture
-def trading_env(sample_data, env_config):
-    feature_eng = FeatureEngineer(env_config)
-    features = feature_eng.build_features(sample_data)
-    env = ForexTradingEnv(df=sample_data, features_df=features, training=False)
+def trading_env(sample_data, full_config):
+    feature_eng = FeatureEngineer(full_config)
+    features    = feature_eng.build_features(sample_data)
+    env = ForexTradingEnv(
+        df=sample_data,
+        features_df=features,
+        config_path="configs/env_config.yaml",
+        training=False
+    )
     return Monitor(env)
 
 
