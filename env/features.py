@@ -13,7 +13,10 @@ class FeatureEngineer:
 
     def __init__(self, config: dict):
         self.config = config
-        self.lookback = config["features"]["lookback_window"]
+        # Handle both full config and env-only config
+        env_cfg = config.get("environment", config)
+        self.feature_cfg = env_cfg.get("features", {})
+        self.lookback = self.feature_cfg.get("lookback_window", 20)
 
     def build_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -22,33 +25,33 @@ class FeatureEngineer:
         """
         features = pd.DataFrame(index=df.index)
 
-        close = df["close"]
-        high  = df["high"]
-        low   = df["low"]
+        close  = df["close"]
+        high   = df["high"]
+        low    = df["low"]
         volume = df["volume"]
 
         # --- Price Action Features ---
-        features["return_1"]      = close.pct_change(1)
-        features["return_5"]      = close.pct_change(5)
-        features["return_20"]     = close.pct_change(20)
-        features["log_return_1"]  = np.log(close / close.shift(1))
-        features["log_return_5"]  = np.log(close / close.shift(5))
+        features["return_1"]     = close.pct_change(1)
+        features["return_5"]     = close.pct_change(5)
+        features["return_20"]    = close.pct_change(20)
+        features["log_return_1"] = np.log(close / close.shift(1))
+        features["log_return_5"] = np.log(close / close.shift(5))
 
         # --- RSI ---
-        if self.config["features"]["use_rsi"]:
+        if self.feature_cfg.get("use_rsi", True):
             features["rsi_7"]  = ta.momentum.RSIIndicator(close, window=7).rsi()  / 100
             features["rsi_14"] = ta.momentum.RSIIndicator(close, window=14).rsi() / 100
             features["rsi_21"] = ta.momentum.RSIIndicator(close, window=21).rsi() / 100
 
         # --- MACD ---
-        if self.config["features"]["use_macd"]:
+        if self.feature_cfg.get("use_macd", True):
             macd_ind = ta.trend.MACD(close, window_slow=26, window_fast=12, window_sign=9)
             features["macd_histogram"]    = macd_ind.macd_diff() / close
             features["macd_signal_cross"] = np.sign(macd_ind.macd_diff())
 
         # --- Bollinger Bands ---
-        if self.config["features"]["use_bollinger"]:
-            bb = ta.volatility.BollingerBands(close, window=20, window_dev=2)
+        if self.feature_cfg.get("use_bollinger", True):
+            bb       = ta.volatility.BollingerBands(close, window=20, window_dev=2)
             bb_upper = bb.bollinger_hband()
             bb_lower = bb.bollinger_lband()
             bb_mid   = bb.bollinger_mavg()
@@ -59,19 +62,21 @@ class FeatureEngineer:
             features["bb_width"] = bb_range / bb_mid
 
         # --- ATR ---
-        if self.config["features"]["use_atr"]:
-            atr = ta.volatility.AverageTrueRange(high, low, close, window=14).average_true_range()
+        if self.feature_cfg.get("use_atr", True):
+            atr = ta.volatility.AverageTrueRange(
+                high, low, close, window=14
+            ).average_true_range()
             features["atr_normalized"] = atr / close
 
         # --- ADX ---
-        if self.config["features"]["use_adx"]:
+        if self.feature_cfg.get("use_adx", True):
             adx_ind = ta.trend.ADXIndicator(high, low, close, window=14)
-            features["adx"] = adx_ind.adx()            / 100
-            features["dmp"] = adx_ind.adx_pos()        / 100
-            features["dmn"] = adx_ind.adx_neg()        / 100
+            features["adx"] = adx_ind.adx()     / 100
+            features["dmp"] = adx_ind.adx_pos() / 100
+            features["dmn"] = adx_ind.adx_neg() / 100
 
         # --- Session Features ---
-        if self.config["features"]["use_session"]:
+        if self.feature_cfg.get("use_session", True):
             hour = df.index.hour
             features["hour_sin"]        = np.sin(2 * np.pi * hour / 24)
             features["hour_cos"]        = np.cos(2 * np.pi * hour / 24)
