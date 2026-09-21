@@ -1,23 +1,23 @@
 environment:
   initial_balance: 10000.0
-  max_position_size: 1.0      # Max lot size
+  max_position_size: 1.0
   min_position_size: 0.01
-  transaction_cost: 0.0001    # Per unit (spread simulation)
-  slippage: 0.00005           # Slippage simulation
-  max_steps: 2000             # Max steps per episode
-  
-  # Risk management (hard limits)
-  max_drawdown: 0.05          # 5% max drawdown
-  max_daily_loss: 0.03        # 3% daily loss limit
-  max_open_trades: 1          # Start simple
-  
+  transaction_cost: 0.0001
+  slippage: 0.00005
+  max_steps: 2000
+
+  # Risk management
+  max_drawdown: 0.05
+  max_daily_loss: 0.03
+  max_open_trades: 1
+
   # Reward weights
   reward:
     pnl_weight: 0.4
     sharpe_weight: 0.3
     drawdown_weight: 0.2
     trade_penalty_weight: 0.1
-  
+
   # Features
   features:
     lookback_window: 20
@@ -26,4 +26,4 @@ environment:
     use_bollinger: true
     use_atr: true
     use_adx: true
-    use_session: true
+    use_session: false    # Disable session features for daily data
