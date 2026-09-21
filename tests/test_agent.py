@@ -55,7 +55,8 @@ def ppo_agent(trading_env):
         eval_env=trading_env,
         pair="EURUSD"
     )
-    agent.build()
+    # Disable tensorboard for tests
+    agent.build(tensorboard_log=None)
     return agent
 
 
@@ -79,7 +80,7 @@ class TestPPOAgent:
         ppo_agent.save(save_path)
 
         new_agent = PPOAgent(train_env=trading_env, eval_env=trading_env)
-        new_agent.build()
+        new_agent.build(tensorboard_log=None)
         new_agent.load(save_path)
 
         assert new_agent.model is not None
