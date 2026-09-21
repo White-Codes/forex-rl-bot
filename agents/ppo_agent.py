@@ -14,7 +14,6 @@ from stable_baselines3.common.callbacks import (
     StopTrainingOnNoModelImprovement,
 )
 from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.env_util import make_vec_env
 
 from agents.base_agent import BaseAgent
 
@@ -22,7 +21,7 @@ from agents.base_agent import BaseAgent
 class PPOAgent(BaseAgent):
     """
     PPO Agent for Forex Trading.
-    
+
     Usage:
         agent = PPOAgent(train_env, eval_env, pair="EURUSD")
         agent.build()
@@ -40,15 +39,25 @@ class PPOAgent(BaseAgent):
     ):
         super().__init__(train_env, config_path, model_dir)
 
-        self.train_env = train_env
-        self.eval_env = eval_env
-        self.pair = pair
-        self.ppo_config = self.config["ppo"]
+        self.train_env      = train_env
+        self.eval_env       = eval_env
+        self.pair           = pair
+        self.ppo_config     = self.config["ppo"]
         self.training_config = self.config["training"]
 
-    def build(self) -> None:
-        """Initialize PPO model with config hyperparameters."""
+    def build(self, tensorboard_log: Optional[str] = "auto") -> None:
+        """
+        Initialize PPO model with config hyperparameters.
+        Pass tensorboard_log=None to disable tensorboard (useful in tests).
+        """
         logger.info(f"Building PPO agent for {self.pair}")
+
+        # "auto" means use default path, None means disabled
+        tb_log = (
+            f"results/{self.pair}/tensorboard"
+            if tensorboard_log == "auto"
+            else tensorboard_log
+        )
 
         self.model = PPO(
             policy="MlpPolicy",
@@ -64,7 +73,7 @@ class PPOAgent(BaseAgent):
             vf_coef=self.ppo_config["vf_coef"],
             max_grad_norm=self.ppo_config["max_grad_norm"],
             verbose=1,
-            tensorboard_log=f"results/{self.pair}/tensorboard",
+            tensorboard_log=tb_log,
             device="auto",
         )
 
@@ -73,14 +82,12 @@ class PPOAgent(BaseAgent):
     def build_callbacks(self) -> CallbackList:
         """Build training callbacks."""
 
-        # Stop training if no improvement
         no_improve_callback = StopTrainingOnNoModelImprovement(
             max_no_improvement_evals=self.training_config["early_stopping_patience"],
             min_evals=10,
             verbose=1,
         )
 
-        # Evaluate and save best model
         eval_callback = EvalCallback(
             self.eval_env,
             best_model_save_path=str(self.model_dir / self.pair / "best"),
@@ -92,7 +99,6 @@ class PPOAgent(BaseAgent):
             callback_after_eval=no_improve_callback,
         )
 
-        # Save checkpoints periodically
         checkpoint_callback = CheckpointCallback(
             save_freq=self.training_config["save_freq"],
             save_path=str(self.model_dir / self.pair / "checkpoints"),
@@ -112,14 +118,14 @@ class PPOAgent(BaseAgent):
             raise RuntimeError("Model not built. Call agent.build() first.")
 
         timesteps = total_timesteps or self.training_config["total_timesteps"]
-        cbs = callbacks or self.build_callbacks()
+        cbs       = callbacks if callbacks is not None else self.build_callbacks()
 
         logger.info(f"Training PPO on {self.pair} for {timesteps:,} timesteps")
 
         self.model.learn(
             total_timesteps=timesteps,
             callback=cbs,
-            progress_bar=True,
+            progress_bar=False,   # Disable in CI to keep logs clean
             reset_num_timesteps=True,
         )
 
@@ -130,11 +136,7 @@ class PPOAgent(BaseAgent):
         observation,
         deterministic: bool = True,
     ):
-        """
-        Predict action from observation.
-        deterministic=True for evaluation/live trading.
-        deterministic=False for exploration during training.
-        """
+        """Predict action from observation."""
         if self.model is None:
             raise RuntimeError("Model not built or loaded.")
 
