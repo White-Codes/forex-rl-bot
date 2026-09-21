@@ -7,22 +7,17 @@ from loguru import logger
 class FeatureEngineer:
     """
     Builds feature matrix from raw OHLCV data.
-    Uses 'ta' library (pip installable, no git needed).
-    All features normalized to [-1, 1] or [0, 1] range.
+    Works with both intraday and daily timeframes.
     """
 
     def __init__(self, config: dict):
-        self.config = config
-        # Handle both full config and env-only config
-        env_cfg = config.get("environment", config)
+        self.config  = config
+        env_cfg      = config.get("environment", config)
         self.feature_cfg = env_cfg.get("features", {})
-        self.lookback = self.feature_cfg.get("lookback_window", 20)
+        self.lookback    = self.feature_cfg.get("lookback_window", 20)
 
     def build_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Main method - builds all features.
-        Returns DataFrame with same index as input.
-        """
+        """Build all features from OHLCV data."""
         features = pd.DataFrame(index=df.index)
 
         close  = df["close"]
@@ -30,7 +25,7 @@ class FeatureEngineer:
         low    = df["low"]
         volume = df["volume"]
 
-        # --- Price Action Features ---
+        # --- Price Action ---
         features["return_1"]     = close.pct_change(1)
         features["return_5"]     = close.pct_change(5)
         features["return_20"]    = close.pct_change(20)
@@ -75,14 +70,17 @@ class FeatureEngineer:
             features["dmp"] = adx_ind.adx_pos() / 100
             features["dmn"] = adx_ind.adx_neg() / 100
 
-        # --- Session Features ---
-        if self.feature_cfg.get("use_session", True):
-            hour = df.index.hour
-            features["hour_sin"]        = np.sin(2 * np.pi * hour / 24)
-            features["hour_cos"]        = np.cos(2 * np.pi * hour / 24)
-            features["london_session"]  = ((hour >= 8)  & (hour < 16)).astype(float)
-            features["ny_session"]      = ((hour >= 13) & (hour < 21)).astype(float)
-            features["overlap_session"] = ((hour >= 13) & (hour < 16)).astype(float)
+        # --- Session Features (only for intraday data) ---
+        if self.feature_cfg.get("use_session", False):
+            try:
+                hour = df.index.hour
+                features["hour_sin"]        = np.sin(2 * np.pi * hour / 24)
+                features["hour_cos"]        = np.cos(2 * np.pi * hour / 24)
+                features["london_session"]  = ((hour >= 8)  & (hour < 16)).astype(float)
+                features["ny_session"]      = ((hour >= 13) & (hour < 21)).astype(float)
+                features["overlap_session"] = ((hour >= 13) & (hour < 16)).astype(float)
+            except AttributeError:
+                logger.warning("Session features skipped — index has no 'hour' (daily data?)")
 
         # --- Market Structure ---
         rolling_high = high.rolling(self.lookback)
@@ -94,7 +92,7 @@ class FeatureEngineer:
         vol_ma = volume.rolling(20).mean()
         features["volume_ratio"] = (volume / vol_ma).clip(0, 5) / 5
 
-        # Drop NaN rows from indicator lookback periods
+        # Drop NaN rows
         features.dropna(inplace=True)
 
         logger.info(f"Built {len(features.columns)} features, {len(features)} rows")
@@ -110,8 +108,6 @@ class FeatureEngineer:
             "bb_position", "bb_width",
             "atr_normalized",
             "adx", "dmp", "dmn",
-            "hour_sin", "hour_cos",
-            "london_session", "ny_session", "overlap_session",
             "dist_from_high", "dist_from_low",
             "volume_ratio",
         ]
